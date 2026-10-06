@@ -1,5 +1,7 @@
 {
   "name": "my-claude-plugin-marketplace",
   "owner": { "name": "AliA1997" },
-  "plugins": []
+  "plugins": [
+    { "name": "agent-dock", "source": "./plugins/agent-dock", "description": "Pick and monitor helper agents, their tasks and token spend" }
+  ]
 }
