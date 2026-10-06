@@ -1,6 +1,6 @@
 {
   "name": "agent-dock",
-  "version": "0.1.3",
-  "description": "Every prompt asks how many helper agents Claude may use (or let Claude decide). A color-coded dock shows each helper agent, its current task and its token spend, with an animated RGB title while Claude works. Move with the arrow keys; /agent-dock opens the dock.",
+  "version": "0.1.4",
+  "description": "Every prompt opens a picker: choose 1, 5, 10, 15, 20, 50 or 60 helper agents. A color-coded dock shows each helper agent, its current task and its token spend, with an animated RGB title while Claude works. /agent-dock opens the dock; /agent-dock limit opens the picker.",
   "author": { "name": "Ali Alhaddad" }
 }

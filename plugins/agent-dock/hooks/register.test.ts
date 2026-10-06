@@ -37,48 +37,70 @@ test('/agent-dock with an unknown argument explains the usage', async ($) => {
   expect(result.text).toContain('is not a limit')
 })
 
-// Stand in for the AskUserQuestion dialog: answer every question with `answer`, or dismiss it
-function fakeAsk(on: any, answer: string | null, asked: string[]) {
-  on('tool.call' as any, { tool: 'AskUserQuestion' }, async (_$: any, e: any) => {
-    const questions = e.input?.questions ?? e.questions ?? []
-    asked.push(...questions.map((q: any) => q.question))
-    if (answer === null) throw new Error('dismissed')
-    const answers = Object.fromEntries(questions.map((q: any) => [q.question, answer]))
-    return { result: { questions, answers } }
-  })
-}
-
 // Stand in for the engine at the bottom of prompt.submit: echo what reached it
 function fakeSubmit(on: any) {
   on('prompt.submit' as any, async (_$: any, e: any) => ({ text: e.text, context: e.context }))
 }
 
-test('a typed prompt asks how many helpers and tells Claude the answer', async ($, on) => {
-  const asked: string[] = []
-  fakeAsk(on, '3', asked)
+// Stand in for the surface placing panes: `placed` false is a terminal too narrow to show one
+function fakePanes(on: any, placed = true) {
+  on('ui.open' as any, async () => ({ value: placed ? { isPlaced: true } : { isPlaced: false, reason: 'too narrow' } }))
+  on('ui.close' as any, async () => ({ value: undefined }))
+}
+
+// Let the prompt.submit chain reach the picker
+async function settle() {
+  for (let i = 0; i < 50; i++) await Promise.resolve()
+}
+
+const PICKER_PROPS = { title: 'Helper agents', isFocused: true, bodyColumns: 120, placement: 'inline' } as any
+
+async function mountPicker($: any) {
+  return $.ui.mount({ plugin: 'agent-dock', surface: 'terminal', component: 'Pane', requestId: 'agent-dock-pick', props: PICKER_PROPS })
+}
+
+test('a typed prompt opens the picker with 1, 5, 10, 15, 20, 50 and 60', async ($, on) => {
+  fakePanes(on)
   fakeSubmit(on)
-  const result: any = await $.prompt.submit({ text: 'fix the bug', origin: { kind: 'composer' }, wait: false } as any)
-  expect(asked.length).toBe(1)
-  expect(result.context).toEqual(['The user wants at most 3 helper agents running at once for this prompt.'])
+  const pending: any = $.prompt.submit({ text: 'fix the bug', origin: { kind: 'composer' }, wait: false } as any)
+  await settle()
+  const ui = await mountPicker($)
+  const select: any = await ui.find({ type: 'Select' } as any)
+  expect(select.props.options.map((o: any) => o.value)).toEqual(['1', '5', '10', '15', '20', '50', '60'])
+  await $.ui.select({ plugin: 'agent-dock', key: 'helper-count', value: '10' } as any)
+  const result = await pending
+  expect(result.context).toEqual(['The user wants at most 10 helper agents running at once for this prompt.'])
+  await ui.unmount()
 })
 
-test('dismissing the question keeps the current limit', async ($, on) => {
-  const asked: string[] = []
-  fakeAsk(on, null, asked)
+test('a picker that cannot be shown keeps the current limit', async ($, on) => {
+  fakePanes(on, false)
   fakeSubmit(on)
   await $.command.run({ command: 'agent-dock', args: 'none' })
   const result: any = await $.prompt.submit({ text: 'fix the bug', origin: { kind: 'composer' }, wait: false } as any)
-  expect(asked.length).toBe(1)
   expect(result.context).toEqual(['The user does not want helper agents for this prompt. Do the work yourself.'])
 })
 
-test('/agent-dock ask off stops the question', async ($, on) => {
-  const asked: string[] = []
-  fakeAsk(on, '2', asked)
+test('/agent-dock ask off stops the picker', async ($, on) => {
   fakeSubmit(on)
   await $.command.run({ command: 'agent-dock', args: 'ask off' })
-  await $.prompt.submit({ text: 'fix the bug', origin: { kind: 'composer' }, wait: false } as any)
-  expect(asked.length).toBe(0)
+  await $.command.run({ command: 'agent-dock', args: '3' })
+  const result: any = await $.prompt.submit({ text: 'fix the bug', origin: { kind: 'composer' }, wait: false } as any)
+  expect(result.context).toEqual(['The user wants at most 3 helper agents running at once for this prompt.'])
+})
+
+test('the picker colors the choices from green to red', async ($, on) => {
+  fakePanes(on)
+  fakeSubmit(on)
+  const pending: any = $.prompt.submit({ text: 'go', origin: { kind: 'composer' }, wait: false } as any)
+  await settle()
+  const ui = await mountPicker($)
+  const texts = await ui.findAll({ type: 'Text' })
+  const color = (n: string) => texts.find((t) => t.text === n)?.props.color
+  expect([color('1'), color('10'), color('60')]).toEqual(['success', 'warning', 'error'])
+  await $.ui.select({ plugin: 'agent-dock', key: 'helper-count', value: '1' } as any)
+  await pending
+  await ui.unmount()
 })
 
 test('the pane draws each helper in its own color under an RGB title', async ($, on) => {

@@ -1,9 +1,10 @@
 // agent-dock
 //   Every prompt you type asks how many helper agents Claude may use for it
-//   (Let Claude decide, None, 2, 4, or type any number under "Other").
+//   A picker pane opens: 1, 5, 10, 15, 20, 50 or 60. Up/Down choose, Enter confirms,
+//   Esc keeps the current limit.
 //   /agent-dock            open a pane listing every helper agent, its current task and its tokens;
 //                          Up/Down move between agents, Enter expands one, Esc closes the pane
-//   /agent-dock limit      ask how many helper agents Claude may use now
+//   /agent-dock limit      open the picker to choose how many helper agents Claude may use
 //   /agent-dock auto | none | <number>   set the limit directly
 //   /agent-dock ask on | off             turn the question on each prompt on or off
 // Each helper agent has its own color. While Claude works, a band above the prompt shows
@@ -11,6 +12,10 @@
 // The spinner of each helper agent also shows its task and token count.
 
 const PANE = 'agent-dock'
+// The pane that asks how many helper agents to use
+const PICKER = 'agent-dock-pick'
+// What the picker offers
+const CHOICES = [1, 5, 10, 15, 20, 50, 60]
 const TITLE = 'AGENT DOCK'
 // How often the RGB animation moves (the engine redraws at most ten times a second)
 const FRAME_MS = 100
@@ -33,6 +38,8 @@ let phase = 0
 let working = false
 let paneOpen = false
 let ticker = null
+// The open picker: { question, resolve }, or null when it isn't open
+let pick = null
 
 const helpers = () => Array.from(agents.values())
 const runningCount = () => helpers().filter((a) => a.status === 'running').length
@@ -77,7 +84,7 @@ function rainbow(Text, text) {
 function startTicker($) {
   ticker?.cancel()
   ticker = $.clock.every(FRAME_MS, () => {
-    if (!working && !paneOpen && runningCount() === 0) return
+    if (!working && !paneOpen && !pick && runningCount() === 0) return
     phase = (phase + 1) % 3600
     $.ui.invalidate('ui.render')
   })
@@ -129,9 +136,33 @@ const limitShort = () =>
 
 const limitText = () => 'Helper agents: ' + limitShort() + '.'
 
-// ask takes 2-4 options; "Other" lets the user type any number
-const askLimit = ($, question) =>
-  $.ui.ask(question, { header: 'Agent dock', options: ['Let Claude decide', 'None', '2', '4'] })
+// Small limits green, middling yellow, large red
+const choiceColor = (n) => (n <= 5 ? 'success' : n <= 20 ? 'warning' : 'error')
+
+// End the open picker with a number, or undefined when it was closed without one
+function finishPick(value) {
+  const p = pick
+  pick = null
+  p?.resolve(value)
+}
+
+// Open the picker pane and wait for a choice. Resolves to the number picked,
+// or undefined when it is closed (Esc) or can't be shown.
+function pickLimit($, question) {
+  finishPick(undefined)
+  return new Promise((resolve) => {
+    pick = { question, resolve }
+    $.ui
+      .open({ id: PICKER, title: 'Helper agents', focus: true, closeOnEscape: true, holdToasts: true, rows: 7 })
+      .then((opened) => {
+        if (!opened?.isPlaced && pick?.resolve === resolve) finishPick(undefined)
+      })
+      .catch(() => {
+        if (pick?.resolve === resolve) finishPick(undefined)
+      })
+    $.ui.invalidate('ui.render')
+  })
+}
 
 // Claude Code calls this once when the mod loads
 export function register(on) {
@@ -169,15 +200,14 @@ export function register(on) {
       }
     }
 
-    let answer = args
     if (args === 'limit') {
-      try {
-        answer = await askLimit($, 'How many helper agents should Claude use?')
-      } catch {
-        return { text: 'Helper agents unchanged. ' + limitText() }
-      }
+      const picked = await pickLimit($, 'How many helper agents should Claude use?')
+      if (picked === undefined) return { text: 'Helper agents unchanged. ' + limitText() }
+      requestedCount = picked
+      return { text: limitText() }
     }
 
+    const answer = args
     const limit = parseLimit(answer)
     if (limit === undefined) {
       return {
@@ -192,6 +222,8 @@ export function register(on) {
 
   on('ui.close', async ($, e, next) => {
     if (e.id === PANE) paneOpen = false
+    // Esc or the close mark on the picker: keep the current limit
+    if (e.id === PICKER) finishPick(undefined)
     return next(e)
   })
 
@@ -199,14 +231,9 @@ export function register(on) {
   on('prompt.submit', async ($, e, next) => {
     const typed = e.origin?.kind === 'composer' || e.origin?.kind === 'bridge'
     if (askEachPrompt && typed && !e.text.trimStart().startsWith('/')) {
-      try {
-        const answer = await askLimit($, 'How many helper agents should Claude use for this prompt?')
-        const limit = parseLimit(answer)
-        if (limit === undefined) $.ui.toast('agent-dock: "' + answer + '" is not a number. ' + limitText())
-        else requestedCount = limit
-      } catch {
-        // Dismissed, or nobody to ask (-p): keep the current limit
-      }
+      const picked = await pickLimit($, 'How many helper agents should Claude use for this prompt?')
+      // Closed without a choice: keep the current limit
+      if (picked !== undefined) requestedCount = picked
     }
 
     working = true
@@ -304,6 +331,37 @@ export function register(on) {
         Text({ color: limitColor(), bold: true, children: [limitShort()] }),
         Text({ dimColor: true, children: [' · helpers ' + runningCount() + '/' + agents.size] }),
         ...chips,
+      ],
+    })
+  })
+
+  // The picker: the question, a color scale of the choices, and the Select itself
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+    if (e.requestId !== PICKER) return next(e)
+    const { Box, Text, Select } = $.ui.resolve(e)
+    const current = CHOICES.includes(requestedCount) ? requestedCount : 5
+    const scale = CHOICES.flatMap((n, i) => [
+      ...(i ? [Text({ dimColor: true, children: [' · '] })] : []),
+      Text({ color: choiceColor(n), bold: n === current, children: [String(n)] }),
+    ])
+    return Box({
+      flexDirection: 'column',
+      children: [
+        Box({ flexDirection: 'row', children: rainbow(Text, TITLE) }),
+        Text({ bold: true, children: [pick?.question ?? 'How many helper agents should Claude use?'] }),
+        Box({ flexDirection: 'row', children: [Text({ dimColor: true, children: ['few '] }), ...scale, Text({ dimColor: true, children: [' many'] })] }),
+        Select({
+          key: 'helper-count',
+          label: 'Helper agents: ',
+          options: CHOICES.map((n) => ({ value: String(n), label: plural(n) })),
+          value: String(current),
+          autoFocus: true,
+          onSelect: (value) => {
+            finishPick(parseInt(value, 10))
+            $.ui.close({ id: PICKER }).catch(() => {})
+          },
+        }),
+        Text({ dimColor: true, children: ['↑/↓ choose · Enter confirm · Esc keep ' + limitShort()] }),
       ],
     })
   })
