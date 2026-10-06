@@ -1,7 +1,8 @@
 // agent-dock
-//   /agents  pick how many helper agents Claude may use (a number, or let Claude decide)
-//   /dock    open a pane listing every helper agent, its current task and its tokens;
-//            Up/Down move between agents, Enter expands one, Esc closes the pane
+//   /agent-dock        open a pane listing every helper agent, its current task and its tokens;
+//                      Up/Down move between agents, Enter expands one, Esc closes the pane
+//   /agent-dock limit  pick how many helper agents Claude may use (a number, or let Claude decide)
+//                      (or set it directly: /agent-dock auto | none | <number>)
 // The spinner of each helper agent also shows its task and token count.
 
 const PANE = 'agent-dock'
@@ -49,47 +50,76 @@ function describeCall(e) {
   return clip(oneLine(e.tool + (detail ? ': ' + detail : '')), 80)
 }
 
+// Turn an answer ('auto', 'none', '3', 'Let Claude decide', ...) into a helper limit.
+// Returns undefined when the answer isn't one we understand.
+function parseLimit(answer) {
+  const s = oneLine(answer).toLowerCase()
+  if (s === 'auto' || s === 'let claude decide') return null
+  if (s === 'none' || s === 'off' || s === '0') return 0
+  if (/^\d+$/.test(s)) return parseInt(s, 10)
+  return undefined
+}
+
+const limitText = () =>
+  requestedCount === null
+    ? 'Helper agents: Claude decides.'
+    : requestedCount === 0
+      ? 'Helper agents: none.'
+      : 'Helper agents: up to ' + requestedCount + '.'
+
 // Claude Code calls this once when the mod loads
 export function register(on) {
-  // Runs when the session starts, before your first prompt
+  // Runs when the session starts, before your first prompt.
+  // (/agents is built into Claude Code, so the mod uses /agent-dock instead.)
   on('session.start', async ($, e, next) => {
-    await $.command.register({
-      name: 'agents',
-      description: 'Choose how many helper agents Claude may use',
-    })
-    await $.command.register({
-      name: 'dock',
-      description: 'Show helper agents, their tasks and token use',
-    })
+    try {
+      await $.command.register({
+        name: 'agent-dock',
+        description: 'Open the agent dock, or set how many helper agents Claude may use',
+        argumentHint: '[limit | auto | none | <number>]',
+      })
+    } catch (err) {
+      $.ui.toast('agent-dock: could not add /agent-dock: ' + (err?.message ?? err))
+    }
     return next(e)
   })
 
-  // /agents asks how many helper agents to use
-  on('command.run', { command: 'agents' }, async ($) => {
-    const choice = await $.ui.ask('How many helper agents should Claude use?', [
-      'Let Claude decide',
-      'None',
-      '1',
-      '2',
-      '3',
-      '4',
-    ])
-    if (choice === 'Let Claude decide') requestedCount = null
-    else if (choice === 'None') requestedCount = 0
-    else if (/^\d+$/.test(choice)) requestedCount = parseInt(choice, 10)
-    else return { text: 'Helper agents unchanged: pick an option from the list.' }
-    return {
-      text:
-        requestedCount === null
-          ? 'Helper agents: Claude decides.'
-          : 'Helper agents: up to ' + requestedCount + '.',
-    }
-  })
+  // /agent-dock              open the dock pane (Up/Down and Enter work at once)
+  // /agent-dock limit        ask how many helper agents Claude may use
+  // /agent-dock auto|none|N  set the limit directly
+  on('command.run', { command: 'agent-dock' }, async ($, e) => {
+    const args = oneLine(e.args).toLowerCase()
 
-  // /dock opens the pane, with the keyboard, so Up/Down and Enter work at once
-  on('command.run', { command: 'dock' }, async ($) => {
-    await $.ui.open({ id: PANE, title: 'Agent dock', focus: true, closeOnEscape: true })
-    return {}
+    if (args === '' || args === 'open') {
+      await $.ui.open({ id: PANE, title: 'Agent dock', focus: true, closeOnEscape: true })
+      return {}
+    }
+
+    let answer = args
+    if (args === 'limit') {
+      try {
+        // ask takes 2-4 options; "Other" lets the user type any number
+        answer = await $.ui.ask('How many helper agents should Claude use?', [
+          'Let Claude decide',
+          'None',
+          '2',
+          '4',
+        ])
+      } catch {
+        return { text: 'Helper agents unchanged. ' + limitText() }
+      }
+    }
+
+    const limit = parseLimit(answer)
+    if (limit === undefined) {
+      return {
+        text:
+          'agent-dock: "' + answer + '" is not a limit. ' +
+          'Use /agent-dock limit, /agent-dock auto, /agent-dock none or /agent-dock <number>.',
+      }
+    }
+    requestedCount = limit
+    return { text: limitText() }
   })
 
   // Tell Claude the user's choice with every prompt (only Claude reads this)
@@ -210,7 +240,7 @@ export function register(on) {
         flexDirection: 'column',
         children: [
           header,
-          Text({ dimColor: true, children: ['No helper agents yet. /agents sets how many Claude may use.'] }),
+          Text({ dimColor: true, children: ['No helper agents yet. /agent-dock limit sets how many Claude may use.'] }),
         ],
       })
     }

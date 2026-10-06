@@ -1,6 +1,6 @@
 {
   "name": "agent-dock",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "When prompting you can select how many helper agents you want to use, or you want to decide. Also you can which task each helper agent is currently working on. You can move up and down using your arrow keys in the terminal to see which helper agent is doing what task. Also you can see how many tokens each helper agent is spending.",
   "author": { "name": "Ali Alhaddad" }
 }
