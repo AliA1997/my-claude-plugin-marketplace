@@ -1,7 +1,7 @@
 {
   "name": "prompt-editor",
-  "version": "0.2.0",
-  "description": "Every prompt you type opens an editor before it is sent: toggle add-on instructions (plan first, add tests, smallest change and more), set how many helper agents Claude may use, and preview exactly what will be sent. Esc sends the prompt as typed. /prompt-editor shows the settings; /prompt-editor on|off, reset, auto, none or <number> change them.",
+  "version": "0.4.0",
+  "description": "Makes the prompt box work like a text editor, the same way for every prompt: Shift+Enter starts a new line (Enter sends), new lines keep their indentation, and prompts are sent exactly as typed. A helper-agent limit is applied as you send, shown in a one-line strip above the prompt. Stays on in every session; /prompt-editor off turns it off. /prompt-editor shows the settings; on|off, auto, none or <number> change them.",
   "author": {
     "name": "Ali Alhaddad"
   }

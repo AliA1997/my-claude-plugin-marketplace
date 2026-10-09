@@ -6,7 +6,7 @@
     {
       "name": "prompt-editor",
       "source": "./plugins/prompt-editor",
-      "description": "Edit each prompt before it's sent: toggle add-on instructions, set the helper-agent limit, and preview exactly what goes to Claude"
+      "description": "Make the prompt box work like a text editor (Shift+Enter for a new line), the same for every prompt, with a helper-agent limit"
     }
   ]
 }
