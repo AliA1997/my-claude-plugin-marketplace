@@ -232,12 +232,12 @@ export function register(on) {
     }
 
     const toggles = EDITS.map((edit) => {
-      const on = chosen.has(edit.id)
+      const isOn = chosen.has(edit.id)
       return Box({
         key: 'row-' + edit.id,
         flexDirection: 'row',
         children: [
-          Text({ color: on ? 'success' : undefined, dimColor: !on, children: [on ? '[x] ' : '[ ] '] }),
+          Text({ color: isOn ? 'success' : undefined, dimColor: !isOn, children: [isOn ? '[x] ' : '[ ] '] }),
           Button({
             key: 'edit-' + edit.id,
             plain: true,
