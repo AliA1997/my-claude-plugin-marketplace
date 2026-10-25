@@ -46,6 +46,7 @@ function fakeEngine(on: any, { files = {} as Record<string, string>, store = {} 
 const start = ($: any) => $.session.start({ source: 'startup', cwd: '.' } as any)
 const run = async ($: any, args: string) => (await $.command.run({ command: 'prompt-editor', args })).text
 const submit = ($: any, text: string) => $.prompt.submit({ text, origin: { kind: 'composer' }, wait: false } as any)
+const submitFrom = ($: any, text: string, kind: string) => $.prompt.submit({ text, origin: { kind }, wait: false } as any)
 const edit = ($: any, e: any) => $.prompt.edit({ origin: { kind: 'composer' }, ...e } as any)
 
 test('starting a session registers /prompt-editor and binds Shift+Enter to a new line', async ($, on) => {
@@ -97,7 +98,7 @@ test('every prompt is sent exactly as typed, whatever it asks for, with the help
   fakeEngine(on, { store: { settings: { on: true, addOns: ['tests', 'plan'], helpers: 3 } } })
   await start($)
   for (const text of ['plan the login fix', 'add tests for the login fix', '/compact']) {
-    const result: any = await submit($, text)
+    const result: any = await submitFrom($, text, text.startsWith('/') ? 'composer' : 'plugin')
     expect(result.text).toBe(text)
     expect(result.context).toEqual(['The user wants at most 3 helper agents running at once for this prompt.'])
   }
@@ -163,4 +164,13 @@ test('the strip above the prompt looks the same everywhere: just the helper limi
     await run($, 'auto')
     await ui.unmount()
   }
+})
+
+test('Enter at the keyboard does not send while the editor is on; slash commands still do', async ($, on) => {
+  const engine = fakeEngine(on)
+  await start($)
+  const blocked: any = await submit($, 'fix the bug')
+  expect(blocked.drop).toBeTruthy()
+  expect(engine.toasts.length).toBe(1)
+  expect(((await submit($, '/compact')) as any).text).toBe('/compact')
 })

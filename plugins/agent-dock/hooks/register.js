@@ -1,6 +1,6 @@
 // agent-dock
 //   Every prompt you type asks how many helper agents Claude may use for it
-//   A picker pane opens: 1, 5, 10, 15, 20, 50 or 60. Up/Down choose, Enter confirms,
+//   A picker pane opens: 0, 1, 2, 3, 5, 8, 13 or 21. Up/Down choose, Enter confirms,
 //   Esc keeps the current limit.
 //   /agent-dock            open a pane listing every helper agent, its current task and its tokens;
 //                          Up/Down move between agents, Enter expands one, Esc closes the pane
@@ -15,8 +15,12 @@ const PANE = 'agent-dock'
 // The pane that asks how many helper agents to use
 const PICKER = 'agent-dock-pick'
 // What the picker offers
-const CHOICES = [1, 5, 10, 15, 20, 50, 60]
+const CHOICES = [0, 1, 2, 3, 5, 8, 13, 21]
 const TITLE = 'AGENT DOCK'
+// Finished helpers kept for the pane; older ones are dropped so a long session stays small
+const MAX_DONE = 20
+// Spawns waiting for an agent id; a spawn that never shows up is dropped past this
+const MAX_PENDING = 50
 // How often the RGB animation moves (the engine redraws at most ten times a second)
 const FRAME_MS = 100
 
@@ -38,6 +42,8 @@ let phase = 0
 let working = false
 let paneOpen = false
 let ticker = null
+// Helpers started this session, so colors keep spreading after old ones are dropped
+let started = 0
 // The open picker: { question, resolve }, or null when it isn't open
 let pick = null
 
@@ -80,11 +86,17 @@ function rainbow(Text, text) {
   )
 }
 
-// Keep the animation going only while something on screen moves
-function startTicker($) {
-  ticker?.cancel()
+// Keep the animation going only while something on screen moves; the timer stops itself when idle
+const animating = () => working || paneOpen || pick || runningCount() > 0
+
+function wakeTicker($) {
+  if (ticker) return
   ticker = $.clock.every(FRAME_MS, () => {
-    if (!working && !paneOpen && !pick && runningCount() === 0) return
+    if (!animating()) {
+      ticker?.cancel()
+      ticker = null
+      return
+    }
     phase = (phase + 1) % 3600
     $.ui.invalidate('ui.render')
   })
@@ -99,10 +111,32 @@ function newAgent(id, name, task) {
     task: task || 'starting…',
     status: 'running',
     tokens: 0,
-    hue: agentHue(agents.size),
+    hue: agentHue(started++),
   }
   agents.set(id, agent)
   return agent
+}
+
+// Drop the oldest finished helpers beyond MAX_DONE (Map keeps insertion order)
+function prune() {
+  let extra = helpers().filter((a) => a.status === 'done').length - MAX_DONE
+  for (const a of helpers()) {
+    if (extra <= 0) break
+    if (a.status !== 'done') continue
+    agents.delete(a.id)
+    if (expandedId === a.id) expandedId = null
+    extra--
+  }
+}
+
+// Forget everything about earlier helpers (a new session)
+function reset() {
+  agents.clear()
+  pendingSpawns.length = 0
+  mainTokens = 0
+  expandedId = null
+  started = 0
+  working = false
 }
 
 // Get (or create) the entry for a helper agent the first time we see its id
@@ -110,7 +144,9 @@ function entryFor(id) {
   const agent = agents.get(id)
   if (agent) return agent
   const spawn = pendingSpawns.shift()
-  return newAgent(id, spawn?.name, spawn?.task)
+  const made = newAgent(id, spawn?.name, spawn?.task)
+  prune()
+  return made
 }
 
 // A short description of what a tool call is doing
@@ -137,7 +173,8 @@ const limitShort = () =>
 const limitText = () => 'Helper agents: ' + limitShort() + '.'
 
 // Small limits green, middling yellow, large red
-const choiceColor = (n) => (n <= 5 ? 'success' : n <= 20 ? 'warning' : 'error')
+const choiceColor = (n) => (n <= 3 ? 'success' : n <= 8 ? 'warning' : 'error')
+const choiceLabel = (n) => (n === 0 ? 'none' : plural(n))
 
 // End the open picker with a number, or undefined when it was closed without one
 function finishPick(value) {
@@ -160,6 +197,7 @@ function pickLimit($, question) {
       .catch(() => {
         if (pick?.resolve === resolve) finishPick(undefined)
       })
+    wakeTicker($)
     $.ui.invalidate('ui.render')
   })
 }
@@ -178,7 +216,7 @@ export function register(on) {
     } catch (err) {
       $.ui.toast('agent-dock: could not add /agent-dock: ' + (err?.message ?? err))
     }
-    startTicker($)
+    reset()
     return next(e)
   })
 
@@ -188,6 +226,7 @@ export function register(on) {
     if (args === '' || args === 'open') {
       await $.ui.open({ id: PANE, title: 'Agent dock', focus: true, closeOnEscape: true })
       paneOpen = true
+      wakeTicker($)
       return {}
     }
 
@@ -237,6 +276,7 @@ export function register(on) {
     }
 
     working = true
+    wakeTicker($)
     $.ui.invalidate('ui.render')
     if (requestedCount === null) return next(e)
     const hint =
@@ -262,7 +302,11 @@ export function register(on) {
     const task = clip(oneLine(e.description || e.prompt || e.task || ''), 80)
     const name = e.name || e.type || e.agentType || e.subagent_type
     if (e.agentId) newAgent(e.agentId, name, task)
-    else pendingSpawns.push({ name, task })
+    else {
+      pendingSpawns.push({ name, task })
+      if (pendingSpawns.length > MAX_PENDING) pendingSpawns.shift()
+    }
+    wakeTicker($)
     $.ui.invalidate('ui.render')
     return next(e)
   })
@@ -291,9 +335,13 @@ export function register(on) {
   // A helper agent finished its turn, or the main turn ended
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) {
-      const agent = entryFor(e.agentId)
-      agent.status = 'done'
-      agent.task = 'done'
+      // An id we never saw (or already dropped) has nothing to mark
+      const agent = agents.get(e.agentId)
+      if (agent) {
+        agent.status = 'done'
+        agent.task = 'done'
+      }
+      prune()
     } else {
       working = false
     }
@@ -353,7 +401,7 @@ export function register(on) {
         Select({
           key: 'helper-count',
           label: 'Helper agents: ',
-          options: CHOICES.map((n) => ({ value: String(n), label: plural(n) })),
+          options: CHOICES.map((n) => ({ value: String(n), label: choiceLabel(n) })),
           value: String(current),
           autoFocus: true,
           onSelect: (value) => {

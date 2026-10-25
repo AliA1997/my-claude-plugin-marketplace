@@ -1,7 +1,8 @@
 // prompt-editor
 //   Makes the prompt box work like a text editor. It works the same way for every prompt:
 //   planning, testing or anything else. Your prompt is sent exactly as you typed it.
-//     - Shift+Enter (and Ctrl+J) start a new line instead of sending; Enter sends
+//     - Shift+Enter (and Ctrl+J) start a new line; Enter does not send
+//     - a Send button above the prompt (mouse click) is the only way to send; slash commands still run
 //     - a new line keeps the indentation of the line above it
 //     - a one-line strip above the prompt shows the helper-agent limit; ctrl+x tab focuses it
 //   Every setting is saved, so the editor stays on in every session until you turn it off.
@@ -177,7 +178,7 @@ export function register(on) {
       redraw()
       return {
         text: editorOn
-          ? 'The prompt editor is on in every session: Shift+Enter starts a new line, Enter sends.'
+          ? 'The prompt editor is on in every session: Shift+Enter starts a new line, and the Send button sends (Enter does not).'
           : 'The prompt editor is off in every session. Prompts are sent as typed. (/prompt-editor on to turn it back on)',
       }
     }
@@ -206,8 +207,12 @@ export function register(on) {
     return next({ ...e, inputText: '\n' + indentAt(e.text, e.start) })
   })
 
-  // Sending: the prompt goes as typed; Claude is told the helper limit
+  // Sending: keyboard sends are refused (slash commands excepted); the Send button is the way
   on('prompt.submit', async ($, e, next) => {
+    if (editorOn && e.origin?.kind === 'composer' && !e.text.trimStart().startsWith('/')) {
+      $.ui.toast('prompt-editor: click the Send button to send (/prompt-editor off restores Enter)')
+      return { drop: 'Enter does not send while the prompt editor is on. Click the Send button.' }
+    }
     const hint = limitHint()
     return hint ? next({ ...e, context: [...(e.context ?? []), hint] }) : next(e)
   })
@@ -246,6 +251,15 @@ export function register(on) {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (!editorOn || e.props.hasSurvey) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
+    // Send: take the draft out of the box and submit it as typed. A plugin's own submit skips
+    // this plugin's prompt.submit hook, so the helper limit rides along as a trailing line.
+    const send = async () => {
+      const { text } = await $.prompt.read()
+      if (!text.trim()) return $.ui.toast('prompt-editor: nothing to send')
+      const hint = limitHint()
+      await $.prompt.fill({ text: '', mode: 'replace' })
+      await $.prompt.submit({ text: hint ? text + '\n\n[' + hint + ']' : text, asUser: true })
+    }
     const change = async (fn) => {
       fn()
       await saveSettings($)
@@ -261,6 +275,12 @@ export function register(on) {
           columnGap: 2,
           children: [
             Text({ bold: true, color: 'suggestion', children: ['✎ Prompt editor'] }),
+            Button({
+              key: 'send',
+              hotkey: 's',
+              label: '▶ Send',
+              onPress: () => send().catch((err) => $.ui.toast('prompt-editor: could not send: ' + (err?.message ?? err))),
+            }),
             Box({
               flexDirection: 'row',
               children: [
@@ -279,7 +299,7 @@ export function register(on) {
         }),
         Text({
           dimColor: true,
-          children: ['Enter send · Shift+Enter or Ctrl+J new line · ctrl+x tab change helpers · /prompt-editor off'],
+          children: ['Click ▶ Send to send (Enter will not) · Shift+Enter or Ctrl+J new line · ctrl+x tab change helpers · /prompt-editor off'],
         }),
       ],
     })
