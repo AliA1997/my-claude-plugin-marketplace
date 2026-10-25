@@ -1,7 +1,7 @@
 // agent-dock
 //   Every prompt you type asks how many helper agents Claude may use for it
-//   A picker pane opens: 0, 1, 2, 3, 5, 8, 13 or 21. Up/Down choose, Enter confirms,
-//   Esc keeps the current limit.
+//   A picker pane opens: 0, 1, 2, 3, 5, 8, 13 or 21. Click a number, then click the Send
+//   button to confirm; Enter does not confirm. Esc keeps the current limit.
 //   /agent-dock            open a pane listing every helper agent, its current task and its tokens;
 //                          Up/Down move between agents, Enter expands one, Esc closes the pane
 //   /agent-dock limit      open the picker to choose how many helper agents Claude may use
@@ -188,9 +188,9 @@ function finishPick(value) {
 function pickLimit($, question) {
   finishPick(undefined)
   return new Promise((resolve) => {
-    pick = { question, resolve }
+    pick = { question, resolve, selected: undefined }
     $.ui
-      .open({ id: PICKER, title: 'Helper agents', focus: true, closeOnEscape: true, holdToasts: true, rows: 7 })
+      .open({ id: PICKER, title: 'Helper agents', focus: true, closeOnEscape: true, holdToasts: true, rows: 9 })
       .then((opened) => {
         if (!opened?.isPlaced && pick?.resolve === resolve) finishPick(undefined)
       })
@@ -383,14 +383,15 @@ export function register(on) {
     })
   })
 
-  // The picker: the question, a color scale of the choices, and the Select itself
+  // The picker: the question, a color scale of the choices, and the Send button
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PICKER) return next(e)
-    const { Box, Text, Select } = $.ui.resolve(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
     const current = CHOICES.includes(requestedCount) ? requestedCount : 5
+    const chosen = pick?.selected ?? current
     const scale = CHOICES.flatMap((n, i) => [
       ...(i ? [Text({ dimColor: true, children: [' · '] })] : []),
-      Text({ color: choiceColor(n), bold: n === current, children: [String(n)] }),
+      Text({ color: choiceColor(n), bold: n === chosen, children: [String(n)] }),
     ])
     return Box({
       flexDirection: 'column',
@@ -398,18 +399,35 @@ export function register(on) {
         Box({ flexDirection: 'row', children: rainbow(Text, TITLE) }),
         Text({ bold: true, children: [pick?.question ?? 'How many helper agents should Claude use?'] }),
         Box({ flexDirection: 'row', children: [Text({ dimColor: true, children: ['few '] }), ...scale, Text({ dimColor: true, children: [' many'] })] }),
-        Select({
-          key: 'helper-count',
-          label: 'Helper agents: ',
-          options: CHOICES.map((n) => ({ value: String(n), label: choiceLabel(n) })),
-          value: String(current),
-          autoFocus: true,
-          onSelect: (value) => {
-            finishPick(parseInt(value, 10))
+        // Choosing only highlights a count; nothing is sent until the Send button is clicked
+        Box({
+          flexDirection: 'row',
+          columnGap: 1,
+          children: CHOICES.map((n) =>
+            Button({
+              key: 'choice-' + n,
+              plain: true,
+              bold: n === chosen,
+              color: n === chosen ? choiceColor(n) : undefined,
+              dimColor: n !== chosen,
+              label: (n === chosen ? '[' + n + ']' : ' ' + n + ' '),
+              onPress: () => {
+                if (pick) pick.selected = n
+                $.ui.invalidate('ui.render')
+              },
+            }),
+          ),
+        }),
+        Text({ color: choiceColor(chosen), children: ['Selected: ' + choiceLabel(chosen)] }),
+        Button({
+          key: 'send-limit',
+          label: '▶ Send',
+          onPress: () => {
+            finishPick(chosen)
             $.ui.close({ id: PICKER }).catch(() => {})
           },
         }),
-        Text({ dimColor: true, children: ['↑/↓ choose · Enter confirm · Esc keep ' + limitShort()] }),
+        Text({ dimColor: true, children: ['Click a number, then click ▶ Send · Esc keep ' + limitShort()] }),
       ],
     })
   })
