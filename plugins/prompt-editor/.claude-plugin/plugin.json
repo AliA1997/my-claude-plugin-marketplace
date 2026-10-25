@@ -1,6 +1,6 @@
 {
   "name": "prompt-editor",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Makes the prompt box work like a text editor, the same way for every prompt: Shift+Enter starts a new line (Enter sends), new lines keep their indentation, and prompts are sent exactly as typed. A helper-agent limit is applied as you send, shown in a one-line strip above the prompt. Stays on in every session; /prompt-editor off turns it off. /prompt-editor shows the settings; on|off, auto, none or <number> change them.",
   "author": {
     "name": "Ali Alhaddad"
